@@ -37,6 +37,25 @@ func main() {
 	fmt.Println(st)
 }
 
+// Used features
+//  - msg.CreatedAt - time of message sending
+//  - msg.User.CreatedAt - time of user creation
+//  - msg.User.Email - user email
 func IsSpam(msg Message) bool {
-	return true
+	newUser := msg.CreatedAt.Sub(msg.User.CreatedAt) <= 1*time.Minute
+
+	blackemail := isBlacklisted(msg.User.Email)
+
+	if newUser && blackemail {
+		return true
+	}
+
+	return false
+}
+
+var blacklist = map[string]struct{}{"10minutemail.com": struct{}{}}
+
+func isBlacklisted(email string) bool {
+	_, ok := blacklist[email]
+	return ok
 }
