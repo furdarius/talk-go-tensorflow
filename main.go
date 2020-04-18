@@ -6,10 +6,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/furdarius/talk-go-tensorflow/runners"
 	tf "github.com/tensorflow/tensorflow/tensorflow/go"
 )
 
@@ -35,63 +37,32 @@ func main() {
 		Text:      "You have WON a guaranteed 1000 cash! To get your money, click the link http://russianroulette.com?n=QJKGIGHJJGCBL",
 	}
 
-	// Use saved_model_cli to analize model signature
-	// docker run -it --rm --net=host -v $(pwd):/workdir -w /workdir tensorflow/tensorflow saved_model_cli show --all --dir model
-
 	dir := "./model"
 	model, err := loadSavedModel(dir)
 	if err != nil {
 		panic(err)
 	}
 
-	msgCreatedAtOutput := tf.Output{
-		Op:    model.Graph.Operation("signature_msg_created_at"),
-		Index: 0,
-	}
-	msgCreatedAtTensor, _ := tf.NewTensor(int64(msg.CreatedAt.Unix()))
+	runner := runners.NewSignatureRunner(model.Graph, model.Session)
 
-	msgTextOutput := tf.Output{
-		Op:    model.Graph.Operation("signature_msg_text"),
-		Index: 0,
-	}
-	msgTextTensor, _ := tf.NewTensor(msg.Text)
-
-	userCreatedAtOutput := tf.Output{
-		Op:    model.Graph.Operation("signature_user_created_at"),
-		Index: 0,
-	}
-	userCreatedAtTensor, _ := tf.NewTensor(msg.User.CreatedAt.Unix())
-
-	userEmailOutput := tf.Output{
-		Op:    model.Graph.Operation("signature_user_email"),
-		Index: 0,
-	}
-	userEmailTensor, _ := tf.NewTensor(msg.User.Email)
-
-	confidenceOutput := tf.Output{
-		Op:    model.Graph.Operation("StatefulPartitionedCall"),
-		Index: 0,
-	}
-
-	// feeds - input tensors for model
-	feeds := map[tf.Output]*tf.Tensor{
-		msgCreatedAtOutput:  msgCreatedAtTensor,
-		msgTextOutput:       msgTextTensor,
-		userCreatedAtOutput: userCreatedAtTensor,
-		userEmailOutput:     userEmailTensor,
-	}
-
-	// fetches define what model will return for us
-	fetches := []tf.Output{confidenceOutput}
-
-	tensors, err := model.Session.Run(feeds, fetches, nil)
+	err = runner.LoadOperations()
 	if err != nil {
 		panic(err)
 	}
 
-	confidence := tensors[0].Value().(float32)
+	req := runners.SignatureRequest{
+		MsgCreatedAt:  msg.CreatedAt.Unix(),
+		MsgText:       msg.Text,
+		UserCreatedAt: msg.User.CreatedAt.Unix(),
+		UserEmail:     msg.User.Email,
+	}
 
-	fmt.Printf("Spam confidence: %f", confidence)
+	resp, err := runner.Run(context.Background(), req)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Spam confidence: %f", resp.Confidence)
 }
 
 func loadSavedModel(dir string) (*tf.SavedModel, error) {
