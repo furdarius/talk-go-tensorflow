@@ -7,7 +7,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
+
+	tf "github.com/tensorflow/tensorflow/tensorflow/go"
 )
 
 type User struct {
@@ -32,30 +35,76 @@ func main() {
 		Text:      "You have WON a guaranteed 1000 cash! To get your money, click the link http://russianroulette.com?n=QJKGIGHJJGCBL",
 	}
 
-	st := IsSpam(msg)
+	// Use saved_model_cli to analize model signature
+	// docker run -it --rm --net=host -v $(pwd):/workdir -w /workdir tensorflow/tensorflow saved_model_cli show --all --dir model
 
-	fmt.Println(st)
-}
-
-// Used features
-//  - msg.CreatedAt - time of message sending
-//  - msg.User.CreatedAt - time of user creation
-//  - msg.User.Email - user email
-func IsSpam(msg Message) bool {
-	newUser := msg.CreatedAt.Sub(msg.User.CreatedAt) <= 1*time.Minute
-
-	blackemail := isBlacklisted(msg.User.Email)
-
-	if newUser && blackemail {
-		return true
+	dir := "./model"
+	model, err := loadSavedModel(dir)
+	if err != nil {
+		panic(err)
 	}
 
-	return false
+	msgCreatedAtOutput := tf.Output{
+		Op:    model.Graph.Operation("signature_msg_created_at"),
+		Index: 0,
+	}
+	msgCreatedAtTensor, _ := tf.NewTensor(int64(msg.CreatedAt.Unix()))
+
+	msgTextOutput := tf.Output{
+		Op:    model.Graph.Operation("signature_msg_text"),
+		Index: 0,
+	}
+	msgTextTensor, _ := tf.NewTensor(msg.Text)
+
+	userCreatedAtOutput := tf.Output{
+		Op:    model.Graph.Operation("signature_user_created_at"),
+		Index: 0,
+	}
+	userCreatedAtTensor, _ := tf.NewTensor(msg.User.CreatedAt.Unix())
+
+	userEmailOutput := tf.Output{
+		Op:    model.Graph.Operation("signature_user_email"),
+		Index: 0,
+	}
+	userEmailTensor, _ := tf.NewTensor(msg.User.Email)
+
+	confidenceOutput := tf.Output{
+		Op:    model.Graph.Operation("StatefulPartitionedCall"),
+		Index: 0,
+	}
+
+	// feeds - input tensors for model
+	feeds := map[tf.Output]*tf.Tensor{
+		msgCreatedAtOutput:  msgCreatedAtTensor,
+		msgTextOutput:       msgTextTensor,
+		userCreatedAtOutput: userCreatedAtTensor,
+		userEmailOutput:     userEmailTensor,
+	}
+
+	// fetches define what model will return for us
+	fetches := []tf.Output{confidenceOutput}
+
+	tensors, err := model.Session.Run(feeds, fetches, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	confidence := tensors[0].Value().(float32)
+
+	fmt.Printf("Spam confidence: %f", confidence)
 }
 
-var blacklist = map[string]struct{}{"10minutemail.com": struct{}{}}
+func loadSavedModel(dir string) (*tf.SavedModel, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("directory \"%s\" doesn't exist", dir)
+	}
 
-func isBlacklisted(email string) bool {
-	_, ok := blacklist[email]
-	return ok
+	metaGraph := "serve"
+
+	model, err := tf.LoadSavedModel(dir, []string{metaGraph}, &tf.SessionOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return model, nil
 }
